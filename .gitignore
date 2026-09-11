@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.log
+*.egg-info/
+test-results.xml
+evidence/*.json
+!evidence/README.md
