@@ -7,6 +7,7 @@ import psycopg
 import pytest
 
 from parking.app import token_hash
+from parking.migrate import MIGRATIONS, migrate
 
 pytestmark = pytest.mark.integration
 PASSWORD = "a-local-test-password-only"
@@ -138,14 +139,9 @@ def contend(client, database_url, space, calls):
         try:
             with psycopg.connect(database_url, autocommit=True) as observer:
                 deadline = time.monotonic() + 3
-                while (
-                    observer.execute("""SELECT count(*) FROM pg_stat_activity
+                while observer.execute("""SELECT count(*) FROM pg_stat_activity
                     WHERE application_name = 'parking-api'
-                      AND cardinality(pg_blocking_pids(pid)) > 0""").fetchone()[
-                        0
-                    ]
-                    < len(calls)
-                ):
+                      AND cardinality(pg_blocking_pids(pid)) > 0""").fetchone()[0] < len(calls):
                     assert time.monotonic() < deadline, "Requests did not reach database lock contention"
                     time.sleep(0.01)
         finally:
@@ -217,3 +213,27 @@ def test_request_cannot_choose_another_customer_or_omit_retry_key(client):
     )
     assert response.status_code == 422
     assert client.get("/bookings", headers=customer).json() == []
+
+
+def test_database_duration_limit_is_elapsed_time_across_dst(client, database_url):
+    owner, customer = account(client, "owner"), account(client, "customer")
+    space = listing(client, owner)
+    booking = reserve(client, customer, space, interval()).json()
+    with psycopg.connect(database_url) as conn:
+        conn.execute("SET TIME ZONE 'America/Chicago'")
+        conn.execute(
+            """UPDATE booking SET starts_at = '2027-03-01T10:00:00Z',
+            ends_at = '2027-03-31T10:00:00Z' WHERE id = %s""",
+            (booking["id"],),
+        )
+        duration = conn.execute("SELECT extract(epoch FROM ends_at - starts_at) FROM booking").fetchone()[0]
+        assert duration == 720 * 3600
+
+
+def test_changed_applied_migration_fails_without_touching_schema(client, database_url, tmp_path):
+    original = MIGRATIONS / "001_initial.sql"
+    (tmp_path / original.name).write_text(original.read_text() + "\n-- modified\n")
+    with pytest.raises(RuntimeError, match="Applied migration changed"):
+        migrate(database_url, tmp_path)
+    with psycopg.connect(database_url) as conn:
+        assert conn.execute("SELECT count(*) FROM schema_migration").fetchone()[0] == 2

@@ -50,6 +50,8 @@ still be demonstrated with query plans and benchmarks.
 Prices are integer cents. The server computes the charge from stored hourly price and
 elapsed microseconds using decimal arithmetic and rounds up once. The result is stored
 on the booking so later pricing changes cannot rewrite its recorded quote.
+Intervals are normalized to UTC. The database's 30-day limit compares elapsed duration
+to 720 hours, so its outcome does not depend on the connection's timezone or daylight saving.
 
 ## Migrations and operation
 

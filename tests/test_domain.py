@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +13,15 @@ def test_price_rounds_up_to_whole_cents_without_float_error():
     assert price_cents(301, start, start + timedelta(minutes=30)) == 151
     assert price_cents(300, start, start + timedelta(hours=1)) == 300
     assert price_cents(1, start, start + timedelta(microseconds=1)) == 1
+
+
+def test_fall_back_hour_is_billed_by_elapsed_time():
+    zone = ZoneInfo("America/Chicago")
+    start = datetime(2027, 11, 7, 1, 30, tzinfo=zone, fold=0)
+    end = datetime(2027, 11, 7, 1, 30, tzinfo=zone, fold=1)
+    assert price_cents(300, start, end) == 300
+    period = Interval(starts_at=start, ends_at=end)
+    assert period.ends_at - period.starts_at == timedelta(hours=1)
 
 
 @pytest.mark.parametrize("minutes", [0, -1, 30 * 24 * 60 + 1])
