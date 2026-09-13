@@ -44,8 +44,9 @@ No payment processing occurs in these transactions.
 Coordinates are stored as `geography(Point, 4326)`. `ST_DWithin` uses meters and a partial
 GiST index on active listings. Results are ordered by distance and listing ID and bounded
 to 100. Search excludes confirmed interval conflicts. Radius is capped at 50 km.
-The schema contains an index, but index selection and latency on a realistic dataset must
-still be demonstrated with query plans and benchmarks.
+The [recorded synthetic radius-query plan](../evidence/README.md) selects the spatial index.
+That benchmark excludes booking availability and distance sorting; the complete endpoint
+still needs measurement with representative listing and reservation data.
 
 Prices are integer cents. The server computes the charge from stored hourly price and
 elapsed microseconds using decimal arithmetic and rounds up once. The result is stored

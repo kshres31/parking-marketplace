@@ -52,7 +52,9 @@ Tests create a unique `parking_test_<uuid>` database and remove only that databa
 they never reset the supplied database. Without this setting, integration tests are explicitly
 skipped. A passing unit-only run does not establish booking or spatial-query correctness.
 
-GitHub Actions supplies the PostGIS service and runs the full suite. See
+GitHub Actions supplies the PostGIS service and runs the full suite. The recorded
+[verification run](evidence/README.md) passed 20 tests and includes raw timing samples and
+a query plan for a synthetic 10,000-listing radius query. See
 [architecture](docs/architecture.md), [security](docs/security.md), and [evidence](evidence/README.md).
 
 ## Boundaries
@@ -69,7 +71,7 @@ GitHub Actions supplies the PostGIS service and runs the full suite. See
 ## Next milestones
 
 Add the Next.js map/search/reservation interface, hosted authentication hardening and rate limits,
-Stripe test-mode payment holds and verified webhook idempotency, spatial query-plan evidence,
-controlled load measurements, and a deployed staging environment. Redis will be introduced only
-for a documented caching or rate-limit need. No performance, production traffic or scalability
-metrics are claimed.
+Stripe test-mode payment holds and verified webhook idempotency, full availability-query
+measurements with populated bookings, controlled HTTP load tests, and a deployed staging
+environment. Redis will be introduced only for a documented caching or rate-limit need.
+The recorded SQL measurement does not establish production traffic capacity or scalability.
