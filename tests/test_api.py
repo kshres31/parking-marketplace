@@ -236,4 +236,4 @@ def test_changed_applied_migration_fails_without_touching_schema(client, databas
     with pytest.raises(RuntimeError, match="Applied migration changed"):
         migrate(database_url, tmp_path)
     with psycopg.connect(database_url) as conn:
-        assert conn.execute("SELECT count(*) FROM schema_migration").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM schema_migration").fetchone()[0] == 3

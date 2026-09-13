@@ -33,6 +33,6 @@ def database_url():
 @pytest.fixture
 def client(database_url):
     with psycopg.connect(database_url, autocommit=True) as conn:
-        conn.execute("TRUNCATE booking, listing, session, account CASCADE")
+        conn.execute("TRUNCATE booking, listing, session, account, payment_event, auth_limit CASCADE")
     with TestClient(create_app(database_url)) as test_client:
         yield test_client

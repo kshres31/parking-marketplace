@@ -4,6 +4,7 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -11,12 +12,15 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from psycopg import Connection
 from psycopg.errors import ExclusionViolation, UniqueViolation
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pwdlib import PasswordHash
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+
+from parking import payments
 
 passwords = PasswordHash.recommended()
 dummy_hash = passwords.hash("non-account timing equalizer")
@@ -87,13 +91,16 @@ def connection(request: Request):
 DB = Annotated[Connection, Depends(connection)]
 
 
-def current_user(conn: DB, auth: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
-    if auth is None or len(auth.credentials) > 256:
+def current_user(
+    request: Request, conn: DB, auth: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+):
+    token = auth.credentials if auth else request.cookies.get("parking_session", "")
+    if not token or len(token) > 256:
         raise HTTPException(401, "Sign in required", headers={"WWW-Authenticate": "Bearer"})
     user = conn.execute(
         """SELECT a.id, a.username FROM account a JOIN session s ON s.account_id = a.id
         WHERE s.token_hash = %s AND s.expires_at > now()""",
-        (token_hash(auth.credentials),),
+        (token_hash(token),),
     ).fetchone()
     if not user:
         raise HTTPException(401, "Session expired or invalid", headers={"WWW-Authenticate": "Bearer"})
@@ -110,9 +117,44 @@ def issue_session(conn, user):
     return {"access_token": token, "token_type": "bearer", "expires_at": expires, "user": user}
 
 
+def auth_limit(conn, request):
+    identity = request.client.host if request.client else "unknown"
+    bucket = hashlib.sha256(identity.encode()).hexdigest()
+    row = conn.execute(
+        """INSERT INTO auth_limit(bucket) VALUES (%s)
+        ON CONFLICT (bucket) DO UPDATE SET
+          attempts = CASE WHEN auth_limit.window_start < now() - interval '10 minutes'
+                          THEN 1 ELSE auth_limit.attempts + 1 END,
+          window_start = CASE WHEN auth_limit.window_start < now() - interval '10 minutes'
+                              THEN now() ELSE auth_limit.window_start END
+        RETURNING attempts""",
+        (bucket,),
+    ).fetchone()
+    if row["attempts"] > int(os.getenv("AUTH_RATE_LIMIT", "30")):
+        raise HTTPException(
+            429, "Too many sign-in attempts. Try again in 10 minutes.", headers={"Retry-After": "600"}
+        )
+
+
+def browser_session(result, request, response):
+    if request.headers.get("X-Browser-Session") == "1":
+        response.set_cookie(
+            "parking_session",
+            result["access_token"],
+            httponly=True,
+            secure=os.getenv("COOKIE_SECURE", "0") == "1",
+            samesite="lax",
+            max_age=43200,
+            path="/",
+        )
+        return {"user": result["user"], "expires_at": result["expires_at"]}
+    return result
+
+
 def create_app(database_url: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
+        payments.validate_settings()
         url = database_url or os.environ["DATABASE_URL"]
         with ConnectionPool(
             url,
@@ -143,10 +185,31 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def security_headers(request, call_next):
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path != "/payments/webhook":
+            origin = request.headers.get("origin")
+            allowed = os.getenv("PUBLIC_URL", str(request.base_url)).rstrip("/")
+            browser_request = request.headers.get("X-Browser-Session") == "1" or (
+                "parking_session" in request.cookies and "authorization" not in request.headers
+            )
+            if (origin and origin != allowed) or (browser_request and origin != allowed):
+                return JSONResponse(status_code=403, content={"detail": "Request origin is not allowed"})
+        if request.method in {"POST", "PUT", "PATCH"}:
+            content = bytearray()
+            async for chunk in request.stream():
+                content.extend(chunk)
+                if len(content) > 65536:
+                    return JSONResponse(status_code=413, content={"detail": "Request is too large"})
+            request._body = bytes(content)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-Frame-Options"] = "DENY"
         return response
+
+    @app.get("/config")
+    def config():
+        return {"payments_mode": payments.mode()}
 
     @app.get("/health")
     def health(conn: DB):
@@ -154,7 +217,8 @@ def create_app(database_url: str | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/auth/register", status_code=201)
-    def register(body: Credentials, conn: DB):
+    def register(body: Credentials, conn: DB, request: Request, response: Response):
+        auth_limit(conn, request)
         hashed = passwords.hash(body.password)
         user = {"id": uuid4(), "username": body.username}
         try:
@@ -164,28 +228,57 @@ def create_app(database_url: str | None = None) -> FastAPI:
                     (user["id"], user["username"], hashed),
                 )
                 result = issue_session(conn, user)
-            return result
+            return browser_session(result, request, response)
         except UniqueViolation:
             raise HTTPException(409, "Username already exists") from None
 
     @app.post("/auth/login")
-    def login(body: Credentials, conn: DB):
+    def login(body: Credentials, conn: DB, request: Request, response: Response):
+        auth_limit(conn, request)
         account = conn.execute("SELECT * FROM account WHERE username = %s", (body.username,)).fetchone()
-        correct = passwords.verify(body.password, account["password_hash"] if account else dummy_hash)
-        if not account or not correct:
+        usable = account and not account["password_hash"].startswith("!")
+        correct = passwords.verify(body.password, account["password_hash"] if usable else dummy_hash)
+        if not usable or not correct:
             raise HTTPException(401, "Invalid username or password")
         with conn.transaction():
             result = issue_session(conn, {"id": account["id"], "username": account["username"]})
-        return result
+        return browser_session(result, request, response)
 
     @app.post("/auth/logout", status_code=204)
-    def logout(user: User, conn: DB, auth: Annotated[HTTPAuthorizationCredentials, Depends(bearer)]):
-        conn.execute("DELETE FROM session WHERE token_hash = %s", (token_hash(auth.credentials),))
-        return Response(status_code=204)
+    def logout(
+        user: User,
+        conn: DB,
+        request: Request,
+        auth: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    ):
+        token = auth.credentials if auth else request.cookies.get("parking_session", "")
+        conn.execute("DELETE FROM session WHERE token_hash = %s", (token_hash(token),))
+        response = Response(status_code=204)
+        response.delete_cookie("parking_session", path="/")
+        return response
 
     @app.get("/me")
     def me(user: User):
         return user
+
+    @app.get("/host/listings")
+    def host_listings(user: User, conn: DB):
+        return conn.execute(
+            """SELECT id, title, address, hourly_price_cents, active,
+            ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude
+            FROM listing WHERE owner_id = %s ORDER BY created_at DESC LIMIT 100""",
+            (user["id"],),
+        ).fetchall()
+
+    @app.get("/host/bookings")
+    def host_bookings(user: User, conn: DB):
+        return conn.execute(
+            """SELECT b.id, b.starts_at, b.ends_at, b.status, b.payment_status,
+            b.total_price_cents, l.title, a.username AS customer
+            FROM booking b JOIN listing l ON l.id = b.listing_id JOIN account a ON a.id = b.customer_id
+            WHERE l.owner_id = %s ORDER BY b.starts_at DESC LIMIT 100""",
+            (user["id"],),
+        ).fetchall()
 
     @app.post("/listings", status_code=201)
     def add_listing(body: ListingInput, user: User, conn: DB):
@@ -227,7 +320,8 @@ def create_app(database_url: str | None = None) -> FastAPI:
                    round(ST_Distance(l.location, o.point)::numeric, 1) AS distance_m
             FROM listing l CROSS JOIN origin o
             WHERE l.active AND ST_DWithin(l.location, o.point, %s)
-              AND NOT EXISTS (SELECT 1 FROM booking b WHERE b.listing_id = l.id AND b.status = 'confirmed'
+              AND NOT EXISTS (SELECT 1 FROM booking b WHERE b.listing_id = l.id
+                  AND (b.status = 'confirmed' OR (b.status = 'held' AND b.hold_expires_at > now()))
                   AND tstzrange(b.starts_at, b.ends_at, '[)') && tstzrange(%s, %s, '[)'))
             ORDER BY distance_m, l.id LIMIT %s""",
             (query.longitude, query.latitude, query.radius_m, query.starts_at, query.ends_at, query.limit),
@@ -269,12 +363,30 @@ def create_app(database_url: str | None = None) -> FastAPI:
                     raise HTTPException(404, "Listing not found")
                 if listing["owner_id"] == user["id"]:
                     raise HTTPException(403, "You cannot reserve your own listing")
+                payments.expire_holds(conn, body.listing_id)
                 total = price_cents(listing["hourly_price_cents"], body.starts_at, body.ends_at)
+                is_paid = payments.mode() == "stripe_test"
+                if is_paid and (total < 50 or body.starts_at < datetime.now(UTC) + timedelta(minutes=40)):
+                    raise HTTPException(
+                        422, "Test checkout requires at least $0.50 and a start 40 minutes away"
+                    )
                 row = conn.execute(
                     """INSERT INTO booking
-                    (id, customer_id, listing_id, request_id, starts_at, ends_at, total_price_cents)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *""",
-                    (uuid4(), user["id"], body.listing_id, request_id, body.starts_at, body.ends_at, total),
+                    (id, customer_id, listing_id, request_id, starts_at, ends_at, total_price_cents,
+                     status, payment_status, hold_expires_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+                    (
+                        uuid4(),
+                        user["id"],
+                        body.listing_id,
+                        request_id,
+                        body.starts_at,
+                        body.ends_at,
+                        total,
+                        "held" if is_paid else "confirmed",
+                        "unpaid" if is_paid else "demo",
+                        datetime.now(UTC) + timedelta(minutes=35) if is_paid else None,
+                    ),
                 ).fetchone()
             return row
         except ExclusionViolation:
@@ -288,8 +400,8 @@ def create_app(database_url: str | None = None) -> FastAPI:
         offset: Annotated[int, Query(ge=0, le=10000)] = 0,
     ):
         return conn.execute(
-            """SELECT * FROM booking WHERE customer_id = %s
-            ORDER BY created_at DESC, id LIMIT %s OFFSET %s""",
+            """SELECT b.*, l.title, l.address FROM booking b JOIN listing l ON l.id = b.listing_id
+            WHERE b.customer_id = %s ORDER BY b.created_at DESC, b.id LIMIT %s OFFSET %s""",
             (user["id"], limit, offset),
         ).fetchall()
 
@@ -302,7 +414,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
             ).fetchone()
             if not booking:
                 raise HTTPException(404, "Booking not found")
-            if booking["status"] == "confirmed":
+            if booking["status"] in {"held", "confirmed"}:
                 if booking["starts_at"] <= datetime.now(UTC):
                     raise HTTPException(409, "A started booking cannot be cancelled")
                 booking = conn.execute(
@@ -310,7 +422,31 @@ def create_app(database_url: str | None = None) -> FastAPI:
                     WHERE id = %s RETURNING *""",
                     (booking_id,),
                 ).fetchone()
+                if booking["payment_status"] == "paid":
+                    payments.queue_refund(conn, booking, booking["payment_intent"])
+                    booking["payment_status"] = "refund_pending"
         return booking
+
+    @app.post("/bookings/{booking_id}/checkout")
+    def start_checkout(booking_id: UUID, user: User, conn: DB):
+        return payments.checkout(conn, booking_id, user["id"])
+
+    @app.post("/payments/webhook")
+    async def webhook(request: Request):
+        event = payments.signed_event(await request.body(), request.headers.get("stripe-signature", ""))
+        # Offload synchronous database processing, avoiding event-loop blocking.
+        from starlette.concurrency import run_in_threadpool
+
+        def process():
+            with request.app.state.pool.connection() as conn:
+                payments.process_event(conn, event)
+
+        await run_in_threadpool(process)
+        return {"received": True}
+
+    public = Path(os.getenv("FRONTEND_DIR", Path(__file__).resolve().parents[1] / "frontend" / "out"))
+    if (public / "index.html").exists():
+        app.mount("/", StaticFiles(directory=public, html=True), name="web")
 
     return app
 

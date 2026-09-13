@@ -1,77 +1,77 @@
-# Parking Marketplace
+# Parkside — Parking Marketplace
 
-An API-first portfolio project for finding and reserving parking. This milestone implements
-FastAPI, PostgreSQL/PostGIS, accounts, listings, location search and transaction-safe booking.
-The Next.js map interface, payments and public deployment are **not implemented yet**.
+A Next.js/TypeScript map interface backed by FastAPI and PostgreSQL/PostGIS. Find fictional
+parking, register, reserve and cancel bookings, or list and pause your own spaces.
 
-## Current workflow
+Two explicit modes: **demo** makes unpaid reservations; **stripe_test** uses Stripe-hosted
+card checkout, expiring holds, signed webhooks and retryable refunds. Live payments are
+disabled. This portfolio app does not grant real parking rights.
 
-1. Register an account (`POST /auth/register`) or sign in (`POST /auth/login`).
-2. Use the returned bearer token to create a listing (`POST /listings`).
-3. Search by coordinates and an aware start/end time (`GET /listings`).
-4. A different account reserves a listing (`POST /bookings`) with an `Idempotency-Key` UUID.
-5. Inspect your reservations (`GET /bookings`) or cancel a future reservation.
+## Run the complete demo
 
-API documentation is at `/docs`. There is no map UI in this milestone. A confirmed
-reservation is an unpaid allocation of time, not a successful payment or real parking entitlement.
-Use fictional demonstration listings only.
-
-## Setup
-
-Requires Docker with Compose, or Python 3.12 and PostgreSQL 16 with PostGIS and btree_gist.
+Install and start Docker Desktop with Compose, then run:
 
 ```sh
-docker compose up --build
+docker compose --profile demo up --build
 ```
 
-The API is bound to `127.0.0.1:8000`; PostgreSQL to `127.0.0.1:55432`.
-The Compose password is for local development. Persistent data lives in the `parking_data`
-volume. Startup applies checksum-verified migrations without resetting data.
+Open **http://localhost:8000** and register your own account. The demo profile inserts six
+fictional Chicago spaces once, without resetting existing records. There is no shared demo
+password. The map uses OpenStreetMap tiles with attribution; the list works if tiles cannot load.
 
-For Python development, create a virtual environment and install the locked dependencies:
+The Docker build exports Next.js and serves it from the API's origin. Browser sessions use
+HttpOnly cookies; JavaScript never receives the token. Non-browser clients can still use
+bearer tokens. Interactive API documentation is at `/docs`.
+
+Compose runs PostGIS, a migration/provisioning job, the app, and a maintenance worker.
+App/worker use a restricted database role; migration ownership stays separate. Services
+bind to loopback. Local passwords in `.env.example` are demonstration values. Records persist
+in the `parking_data` volume; do not remove it to upgrade.
+
+## Verification and development
 
 ```sh
 python -m pip install -r requirements.lock
-```
-
-Set `DATABASE_URL` using `.env.example` as a guide (the Python application does not automatically
-load `.env`), then run `python -m parking.migrate` and `uvicorn parking.app:app --reload`.
-Use a separate migration account in a future hosted environment: the local Compose account
-has database-owner privileges and is not a production privilege model.
-
-## Verify
-
-```sh
 ruff check .
 pytest -v
+cd frontend
+npm ci
+npm run build
+npm run test:e2e
 ```
 
-Unit tests run without PostgreSQL. Integration tests require `TEST_DATABASE_URL`, pointing
-to a PostgreSQL/PostGIS server account with permission to create disposable databases.
-Tests create a unique `parking_test_<uuid>` database and remove only that database at teardown;
-they never reset the supplied database. Without this setting, integration tests are explicitly
-skipped. A passing unit-only run does not establish booking or spatial-query correctness.
+Integration/browser tests require `TEST_DATABASE_URL` with permission to create disposable
+PostGIS databases and the test runtime role. They never reset the supplied database.
+Unit-only runs explicitly skip integration cases. Browser tests use the built UI and real
+API/database on desktop/mobile viewports. CI also records a spatial-query benchmark.
 
-GitHub Actions supplies the PostGIS service and runs the full suite. The recorded
-[verification run](evidence/README.md) passed 20 tests and includes raw timing samples and
-a query plan for a synthetic 10,000-listing radius query. See
-[architecture](docs/architecture.md), [security](docs/security.md), and [evidence](evidence/README.md).
+For manual development, set `DATABASE_URL`, apply `python -m parking.migrate`, build the
+frontend, and start `uvicorn parking.app:app` plus `python -m parking.worker`. Rebuild after
+frontend edits; restart the API if the export did not exist at startup. Python does not
+automatically read `.env` outside Compose.
 
-## Boundaries
+## Behavior
 
-- Usernames are lowercase identifiers, 3–40 characters. Passwords are 12–128 characters.
-- Sessions last 12 hours. Logout revokes the current token; no refresh flow exists yet.
-- Listing prices are integer USD cents per hour. Charges round up to the next cent.
-- Booking intervals are timezone-aware, positive and no longer than 30 days.
-- Listings are available at all times unless reserved or deactivated; operating hours are future work.
-- Deactivating a listing blocks new bookings and preserves existing reservations.
-- Cancelling a future booking releases its interval. Replaying its original request returns its
-  current cancelled state; it never silently recreates a booking.
+- Timezone-aware intervals, elapsed-time pricing in integer USD cents, maximum 720 hours.
+- Database exclusion protects held/confirmed intervals; adjacent bookings are valid.
+- Customer-scoped UUID retry keys return the existing booking, including cancellations.
+- Owner-only listing/reservation views and customer-only booking reads/cancellation.
+- Twelve-hour revocable sessions, browser origin checks and shared sign-in rate limits.
+- Stripe test holds last 35 minutes; start checkout in the first four minutes. Minimum
+  payment $0.50; parking must start at least 40 minutes away.
+- A signed paid webhook with matching amount/currency confirms payment. Browser redirects
+  cannot confirm bookings. Late payments queue a refund instead of reclaiming a space.
+- Paid cancellation releases the interval and queues a full test refund.
+- Listings operate around the clock until paused; pausing preserves existing reservations.
 
-## Next milestones
+## Deployment and evidence
 
-Add the Next.js map/search/reservation interface, hosted authentication hardening and rate limits,
-Stripe test-mode payment holds and verified webhook idempotency, full availability-query
-measurements with populated bookings, controlled HTTP load tests, and a deployed staging
-environment. Redis will be introduced only for a documented caching or rate-limit need.
-The recorded SQL measurement does not establish production traffic capacity or scalability.
+See [deployment](docs/deployment.md), [payment acceptance](docs/payments.md),
+[architecture](docs/architecture.md), [security](docs/security.md), and the
+[evidence ledger](evidence/README.md).
+
+No hosting or Stripe account was available, so there is no live deployment or authenticated
+sandbox result to claim. Automated payment tests use signed fixtures and simulated provider
+responses against a real database. Account recovery, operational alerts, a restore drill,
+and a deployed acceptance pass remain before public use. Earlier test/benchmark results
+apply to their recorded source revisions; new tests are not counted as passing until CI finishes.

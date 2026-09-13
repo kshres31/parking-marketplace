@@ -9,7 +9,7 @@ for reservation exclusivity across every API process.
 
 ```mermaid
 flowchart LR
-  Client[API client / future Next.js UI] --> API[FastAPI]
+  Client[Next.js map UI / API client] --> API[FastAPI]
   API --> Pool[psycopg pool]
   Pool --> DB[(PostgreSQL / PostGIS)]
   DB --> Spatial[GiST geography index]
@@ -17,7 +17,7 @@ flowchart LR
 ```
 
 `no_overlapping_bookings` excludes equal listing IDs with overlapping half-open
-`tstzrange(starts_at, ends_at, '[)')` values for confirmed bookings. The database waits on
+`tstzrange(starts_at, ends_at, '[)')` values for held and confirmed bookings. The database waits on
 uncommitted conflicts and rejects a loser. The API maps this exclusion violation to HTTP 409.
 Back-to-back reservations are valid because the end boundary is excluded. Availability search
 is a convenience; its result never guarantees that a later reservation will still succeed.
@@ -37,7 +37,21 @@ cancelled booking. Failed transactions do not consume the key.
 This serializes a customer's concurrent booking requests. It is a deliberate initial tradeoff,
 not a claim of maximum throughput. A shared lock on the listing coordinates reservation with
 owner deactivation. Cancellation locks its booking row and atomically changes its status.
-No payment processing occurs in these transactions.
+Stripe network requests happen outside these transactions. Signed webhooks lock the booking
+and atomically store their event ID with the state transition; a durable refund job compensates
+late payment or paid cancellation. See [payment boundaries](payments.md).
+
+## Browser and hosting boundary
+
+Next.js exports a static React interface served by the API from the same origin. Leaflet
+renders attributed OpenStreetMap tiles; search/list/book/cancel/host operations use the real
+API. Browser login returns an HttpOnly cookie and user metadata, never a JavaScript-readable
+token. Unsafe browser requests require the configured Origin; non-browser bearer clients
+retain the existing API contract. Authentication attempt counters are shared in PostgreSQL.
+No Redis dependency is introduced solely for a technology claim.
+
+Compose separates the migration owner from the app/worker role. Maintenance runs independently
+and releases expired holds, removes expired sessions/counters, and retries refund jobs.
 
 ## Location search and money
 

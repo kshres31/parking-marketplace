@@ -8,7 +8,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     services:
       postgres:
         image: postgis/postgis:16-3.5
@@ -33,6 +33,19 @@ jobs:
       - run: ruff check .
       - run: pytest -v --junitxml=test-results.xml
       - run: python -m scripts.benchmark_search
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -40,4 +53,6 @@ jobs:
           path: |
             test-results.xml
             evidence/search.json
+            frontend/test-results/
+            frontend/playwright-report/
           retention-days: 30
