@@ -13,5 +13,12 @@ Other tests cover Argon2/token storage, expiry/logout, geographic filtering, adj
 owner/customer access boundaries, cancellation, failed insertion/retry, timezone validation and
 integer-cent rounding. Unit tests alone do not verify database behavior.
 
-No load benchmark or spatial query plan has been recorded. Do not claim latency reductions,
+Run `python -m scripts.benchmark_search` with `TEST_DATABASE_URL` to create a separate
+disposable database, seed a deterministic 10,000-location grid, warm up 20 times and collect
+100 SQL round-trip samples plus an `EXPLAIN (ANALYZE, BUFFERS)` plan. GitHub Actions saves
+the raw samples, plan, source revision, server versions and workload in its `parking-verification`
+artifact for 30 days. The supplied database is never reset. The synthetic dataset has no bookings.
+The benchmark measures one SQL radius query on one connection, not the complete availability
+endpoint, HTTP traffic, multiple customers, or cold-cache behavior. Inspect the actual query plan
+before claiming index use. No load benchmark has been recorded. Do not claim latency reductions,
 throughput, payment reliability, live customers, deployed service availability, or production readiness.
