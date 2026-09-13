@@ -9,3 +9,10 @@ __pycache__/
 test-results.xml
 evidence/*.json
 !evidence/README.md
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/*.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
+.sites-runtime/
