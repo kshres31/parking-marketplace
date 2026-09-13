@@ -44,6 +44,8 @@ class Interval(BaseModel):
 
     @model_validator(mode="after")
     def valid_interval(self):
+        self.starts_at = self.starts_at.astimezone(UTC)
+        self.ends_at = self.ends_at.astimezone(UTC)
         if not timedelta(0) < self.ends_at - self.starts_at <= timedelta(days=30):
             raise ValueError("Booking interval must be positive and at most 30 days")
         return self
@@ -68,7 +70,7 @@ class ListingStatus(BaseModel):
 
 
 def price_cents(hourly: int, starts: datetime, ends: datetime) -> int:
-    elapsed = ends - starts
+    elapsed = ends.astimezone(UTC) - starts.astimezone(UTC)
     microseconds = (elapsed.days * 86400 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
     return int((Decimal(hourly) * microseconds / 3_600_000_000).to_integral_value(rounding=ROUND_CEILING))
 
