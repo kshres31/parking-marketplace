@@ -1,5 +1,29 @@
 # Evidence ledger
 
+## Full application verification — checked September 14, 2026
+
+[Run 34779827580](https://github.com/kshres31/parking-marketplace/actions/runs/34779827580)
+passed **29 Python tests and 4 browser tests**, with zero failures or skips. Ruff, the
+production Next.js build and the spatial benchmark also succeeded. Tested source:
+`5a754fcf58a880dc6234d9b26b5d36288ac28fe4`.
+
+The browser tests exercise registration, search, booking, cookie persistence, cancellation,
+sign-out, host listing creation and pause on desktop and mobile Chromium, using the real
+FastAPI/PostGIS backend. Screenshots were inspected; a follow-up layout fix gives the mobile
+date/time fields full width so their values remain readable.
+
+The new Python cases cover browser origin checks, HttpOnly login responses, request limits,
+shared authentication throttling, host access boundaries, runtime-role restrictions, held
+booking expiry, signed payment events, duplicate/late payment handling and refund retry.
+Payment-provider responses are simulated. This is not an authenticated Stripe sandbox run.
+
+[Python test report](runs/34779827580/test-results.xml) and
+[raw SQL benchmark](runs/34779827580/search.json) are copied from the original CI artifact.
+The downloaded ZIP matched GitHub's SHA-256:
+`f0818fa1781addd72061cf7ee2881d5645053a219d67cdafa4993b808a6ffad6`.
+The browser report and screenshots are in that run's artifact (30-day retention).
+No hosted deployment, external Stripe acceptance or production-readiness claim is implied.
+
 ## Verified run: September 13, 2026
 
 [GitHub Actions run 34773240058](https://github.com/kshres31/parking-marketplace/actions/runs/34773240058)
