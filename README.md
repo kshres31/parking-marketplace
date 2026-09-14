@@ -70,6 +70,9 @@ See [deployment](docs/deployment.md), [payment acceptance](docs/payments.md),
 [architecture](docs/architecture.md), [security](docs/security.md), and the
 [evidence ledger](evidence/README.md).
 
+The full application [CI run](https://github.com/kshres31/parking-marketplace/actions/runs/34779827580)
+passed 29 Python tests and four desktop/mobile browser tests using the real API/PostGIS database.
+
 No hosting or Stripe account was available, so there is no live deployment or authenticated
 sandbox result to claim. Automated payment tests use signed fixtures and simulated provider
 responses against a real database. Account recovery, operational alerts, a restore drill,

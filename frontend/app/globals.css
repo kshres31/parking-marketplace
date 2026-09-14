@@ -910,3 +910,9 @@ dialog .alert {
 .search-bar select {
   font-size: 1rem;
 }
+@media (max-width: 700px) {
+  .search-bar label:nth-child(2),
+  .search-bar label:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+}
