@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgis/postgis:16-3.5
+    environment:
+      POSTGRES_DB: parking
+      POSTGRES_USER: parking
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_parking_only}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - parking_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parking -d parking"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://parking:${POSTGRES_PASSWORD:-local_parking_only}@db:5432/parking
+      APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:-local_application_only_password}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "python -m parking.migrate && python -m scripts.provision_runtime"]
+  api:
+    build: .
+    environment: &runtime
+      DATABASE_URL: postgresql://parking_app:${APP_DATABASE_PASSWORD:-local_application_only_password}@db:5432/parking
+      PAYMENTS_MODE: ${PAYMENTS_MODE:-demo}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  worker:
+    build: .
+    environment: *runtime
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "parking.worker"]
+    restart: unless-stopped
+  seed:
+    build: .
+    profiles: [demo]
+    environment: *runtime
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "scripts.seed_demo"]
+volumes:
+  parking_data:
