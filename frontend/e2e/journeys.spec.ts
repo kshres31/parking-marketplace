@@ -71,6 +71,10 @@ test("find, register, reserve, persist session, and cancel through the real API"
     fullPage: true,
   });
   await page.getByRole("button", { name: "Sign out" }).click();
+  // Sign-out finishes by returning to search; wait for it before navigating again.
+  await expect(
+    page.getByRole("button", { name: "Sign in", exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "My bookings", exact: true }).click();
   await expect(
     page.getByText("Sign in to manage your bookings and parking listings."),
