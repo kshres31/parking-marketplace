@@ -36,6 +36,8 @@ ruff check .
 pytest -v
 cd frontend
 npm ci
+npm run typecheck
+npm test          # Vitest unit/component tests
 npm run build
 npm run test:e2e
 ```
