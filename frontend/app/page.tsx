@@ -6,7 +6,7 @@ const ParkingMap = dynamic(() => import("./map"), {
   ssr: false,
   loading: () => <div className="map map-loading">Loading map…</div>,
 });
-type User = { id: string; username: string };
+type User = { id: string; username: string; role: "customer" | "owner" };
 type Booking = {
   id: string;
   title: string;
@@ -184,8 +184,9 @@ export default function Home() {
   const refresh = useCallback(async () => {
     if (!user) return;
     try {
-      if (view === "bookings") setBookings(await api<Booking[]>("/bookings"));
-      if (view === "host") {
+      if (view === "bookings" && user.role === "customer")
+        setBookings(await api<Booking[]>("/bookings"));
+      if (view === "host" && user.role === "owner") {
         const [owned, reservations] = await Promise.all([
           api<Space[]>("/host/listings"),
           api<Booking[]>("/host/bookings"),
@@ -301,8 +302,8 @@ export default function Home() {
         <nav aria-label="Main navigation">
           {[
             ["search", "Find parking"],
-            ["bookings", "My bookings"],
-            ["host", "Host a space"],
+            ...(user?.role !== "owner" ? [["bookings", "My bookings"]] : []),
+            ...(user?.role !== "customer" ? [["host", "Host a space"]] : []),
           ].map(([key, label]) => (
             <button
               key={key}
@@ -507,7 +508,7 @@ export default function Home() {
                   {view === "bookings" ? "My bookings" : "Your parking spaces"}
                 </h1>
               </div>
-              {user && (
+              {user?.role === (view === "host" ? "owner" : "customer") && (
                 <button
                   className="button dark"
                   onClick={() =>
@@ -519,7 +520,20 @@ export default function Home() {
               )}
             </div>
             {message}
-            {!user ? (
+            {user && user.role !== (view === "host" ? "owner" : "customer") ? (
+              <div className="empty">
+                <h2>
+                  {view === "host"
+                    ? "Hosting needs an owner account"
+                    : "Bookings need a customer account"}
+                </h2>
+                <p>
+                  {view === "host"
+                    ? "Customer accounts reserve parking. Create an owner account to list spaces."
+                    : "Owner accounts manage listings. Create a customer account to reserve parking."}
+                </p>
+              </div>
+            ) : !user ? (
               <div className="empty">
                 <h2>A space of your own</h2>
                 <p>Sign in to manage your bookings and parking listings.</p>
@@ -713,16 +727,18 @@ export default function Home() {
           )}
           <button
             className="button dark full"
-            disabled={busy}
+            disabled={busy || user?.role === "owner"}
             onClick={() => void reserve()}
           >
             {busy
               ? "Reserving…"
-              : user
-                ? mode === "demo"
-                  ? "Reserve demo space"
-                  : "Hold space for checkout"
-                : "Sign in to reserve"}
+              : user?.role === "owner"
+                ? "Owner accounts cannot reserve"
+                : user
+                  ? mode === "demo"
+                    ? "Reserve demo space"
+                    : "Hold space for checkout"
+                  : "Sign in to reserve"}
           </button>
         </Modal>
       )}
@@ -737,9 +753,27 @@ export default function Home() {
           <p className="muted">
             {auth === "login"
               ? "Sign in to find your next space."
-              : "One account for finding and hosting parking."}
+              : "Choose whether you are here to park or to host."}
           </p>
           <form className="stack" onSubmit={signIn}>
+            {auth === "register" && (
+              <fieldset className="role-choice">
+                <legend>I want to</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="role"
+                    value="customer"
+                    defaultChecked
+                  />
+                  Reserve parking
+                </label>
+                <label>
+                  <input type="radio" name="role" value="owner" />
+                  List my parking spaces
+                </label>
+              </fieldset>
+            )}
             <label>
               Username
               <input

@@ -1,6 +1,6 @@
 import { test, expect, Page } from "@playwright/test";
 const password = "portfolio-browser-test-password";
-async function register(page: Page) {
+async function register(page: Page, role: "customer" | "owner" = "customer") {
   const username =
     "web_" + crypto.randomUUID().replaceAll("-", "").slice(0, 12);
   await page
@@ -10,6 +10,9 @@ async function register(page: Page) {
   await page
     .getByRole("button", { name: "New here? Create an account" })
     .click();
+  await page
+    .getByLabel(role === "owner" ? "List my parking spaces" : "Reserve parking")
+    .check();
   await page.getByLabel("Username", { exact: true }).fill(username);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page
@@ -80,7 +83,10 @@ test("host creates and pauses a listing; search updates and layout fits", async 
   await expect(
     page.getByRole("heading", { name: /available spaces/ }),
   ).toBeVisible();
-  const username = await register(page);
+  const username = await register(page, "owner");
+  await expect(
+    page.getByRole("button", { name: "My bookings", exact: true }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Host a space", exact: true }).click();
   await page
     .getByRole("button", { name: "+ List a space", exact: true })

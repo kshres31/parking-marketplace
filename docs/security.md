@@ -27,3 +27,12 @@ That narrow dependency check is not a code security assessment or a guarantee ag
 No wildcard credentialed CORS policy is enabled. The Compose services bind only to loopback.
 No real customer data or payment details are required for demonstrations. Public exposure is
 not yet configured. A security document is not a penetration-test result.
+
+## Roles and uploads
+
+Roles are stored on the account and checked server-side per endpoint; the client's role only
+changes which screens are shown. Registration accepts `customer` or `owner` and nothing else.
+Image uploads are owner-only, limited to 2 MiB (enforced while streaming the body, before the
+handler runs), typed by magic bytes rather than the client's header, and served with
+`Content-Security-Policy: default-src 'none'; sandbox` and `nosniff`, so an uploaded file cannot
+run script in the app's origin.

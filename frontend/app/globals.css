@@ -916,3 +916,23 @@ dialog .alert {
     grid-column: 1 / -1;
   }
 }
+.role-choice {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.role-choice legend {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.role-choice label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+.role-choice input {
+  width: auto;
+}
