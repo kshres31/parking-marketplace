@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-11-24. Keep this file current at the end of every working session.
+Last updated: 2026-11-24 (milestone 3). Keep this file current at the end of every working session.
 
 ## Where things stand
 
@@ -35,12 +35,21 @@ tests pass; `ruff check` and `ruff format --check` are clean.
 - Two new Playwright journeys (feature/price filtering with listing details; owner photo upload,
   edit and delete). 8/8 browser tests pass on desktop and mobile locally.
 
+Milestones 1 and 2 merged to `main` as PRs #2 and #3.
+
+### Milestone 3 (branch `feat/map-search-pagination`)
+
+- Clicking the map searches around that point ("Map pin" in the destination picker).
+- Customer bookings load 20 at a time with "Load more" (deduplicated if offsets shift).
+- Owners switch reservations between upcoming and past. Shortcut: this filters the newest 100
+  rows client-side; add a server-side filter if owners need deeper history.
+- 34 Vitest tests and 10 Playwright tests pass locally.
+
 ## Next milestones
 
-1. Booking UX: customer booking pagination in the UI and an owner filter for upcoming vs past.
-2. Search: let customers pick a point on the map (or geocode an address) instead of three
-   fixed cities.
-3. Operations: deployed acceptance pass, restore drill and alerting (see README).
+1. Address search (geocoding) as an alternative to clicking the map.
+2. Operations: deployed acceptance pass, restore drill and alerting (see README).
+3. Live Stripe test-mode run once a Stripe test account is connected.
 
 ## Decisions
 
