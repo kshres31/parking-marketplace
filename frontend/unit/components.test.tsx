@@ -2,11 +2,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AuthDialog } from "../app/components/AuthDialog";
+import { BookingsView } from "../app/components/BookingsView";
 import { HostView } from "../app/components/HostView";
 import { ListingDialog } from "../app/components/ListingDialog";
 import { SearchPanel } from "../app/components/SearchPanel";
 import { SpaceDialog } from "../app/components/SpaceDialog";
-import type { SearchFilters, Space } from "../app/lib/types";
+import type { Booking, SearchFilters, Space } from "../app/lib/types";
 
 const space: Space = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -232,5 +233,64 @@ describe("HostView", () => {
     expect(
       screen.getByText("New reservations will appear here."),
     ).toBeInTheDocument();
+  });
+});
+
+const booking = (id: string, hoursFromNow: number): Booking => ({
+  id,
+  title: "Bay " + id,
+  address: "Demo street",
+  starts_at: new Date(Date.now() + (hoursFromNow - 1) * 3600000).toISOString(),
+  ends_at: new Date(Date.now() + hoursFromNow * 3600000).toISOString(),
+  total_price_cents: 400,
+  status: "confirmed",
+  payment_status: "demo",
+  customer: "cust",
+});
+
+describe("BookingsView", () => {
+  const props = {
+    busy: false,
+    checkout: vi.fn(),
+    cancel: vi.fn(),
+    findParking: vi.fn(),
+  };
+  it("offers more bookings only when another page exists", async () => {
+    const loadMore = vi.fn();
+    const { rerender } = render(
+      <BookingsView
+        {...props}
+        bookings={[booking("a", 5)]}
+        loadMore={loadMore}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Load more bookings" }),
+    );
+    expect(loadMore).toHaveBeenCalled();
+    rerender(<BookingsView {...props} bookings={[booking("a", 5)]} />);
+    expect(
+      screen.queryByRole("button", { name: "Load more bookings" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("HostView reservations", () => {
+  it("switches between upcoming and past reservations", async () => {
+    render(
+      <HostView
+        spaces={[]}
+        bookings={[booking("next", 5), booking("done", -5)]}
+        busy={false}
+        toggle={vi.fn()}
+        edit={vi.fn()}
+        remove={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Bay next")).toBeInTheDocument();
+    expect(screen.queryByText("Bay done")).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Show"), "past");
+    expect(screen.getByText("Bay done")).toBeInTheDocument();
+    expect(screen.queryByText("Bay next")).not.toBeInTheDocument();
   });
 });
