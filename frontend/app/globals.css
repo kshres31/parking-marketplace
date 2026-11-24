@@ -1070,3 +1070,26 @@ dialog .alert {
     margin: 0 3%;
   }
 }
+.load-more {
+  display: block;
+  margin: 28px auto 0;
+}
+.subheading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.subheading-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.subheading-row select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}

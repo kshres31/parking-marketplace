@@ -28,6 +28,7 @@ const ParkingMap = dynamic(() => import("./map"), {
 
 type View = "search" | "bookings" | "host";
 const VIEW_ROLE = { bookings: "customer", host: "owner" } as const;
+const BOOKING_PAGE = 20;
 
 export default function Home() {
   const [view, setView] = useState<View>("search");
@@ -51,6 +52,7 @@ export default function Home() {
   const [selected, setSelected] = useState<Space | null>(null);
   const [auth, setAuth] = useState<"login" | "register" | null>(null);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [moreBookings, setMoreBookings] = useState(false);
   const [hostSpaces, setHostSpaces] = useState<Space[]>([]);
   const [hostBookings, setHostBookings] = useState<Booking[]>([]);
   const [editing, setEditing] = useState<Space | "new" | null>(null);
@@ -116,8 +118,11 @@ export default function Home() {
   const refresh = useCallback(async () => {
     if (!user) return;
     try {
-      if (view === "bookings" && user.role === "customer")
-        setBookings(await api<Booking[]>("/bookings"));
+      if (view === "bookings" && user.role === "customer") {
+        const first = await api<Booking[]>(`/bookings?limit=${BOOKING_PAGE}`);
+        setBookings(first);
+        setMoreBookings(first.length === BOOKING_PAGE);
+      }
       if (view === "host" && user.role === "owner") {
         const [owned, reservations] = await Promise.all([
           api<Space[]>("/host/listings"),
@@ -196,8 +201,7 @@ export default function Home() {
       });
       retry.current = null;
       setSelected(null);
-      setView("bookings");
-      setBookings(await api<Booking[]>("/bookings"));
+      navigate("bookings");
       setNotice(
         booking.status === "held"
           ? "Your space is held for 35 minutes. Continue to test checkout."
@@ -346,9 +350,15 @@ export default function Home() {
                   center={filters.center}
                   selected={selected?.id}
                   select={select}
+                  pick={(center) => {
+                    const next = { ...filters, center };
+                    setCity("Map pin");
+                    setFilters(next);
+                    void search(next);
+                  }}
                 />
                 <div className="map-caption">
-                  A little closer to where you’re going.
+                  Click the map to search around that spot.
                 </div>
               </div>
             </section>
@@ -406,6 +416,24 @@ export default function Home() {
               <BookingsView
                 bookings={bookings}
                 busy={busy}
+                loadMore={
+                  moreBookings
+                    ? () =>
+                        void act(async () => {
+                          const next = await api<Booking[]>(
+                            `/bookings?limit=${BOOKING_PAGE}&offset=${bookings.length}`,
+                          );
+                          // Offsets can shift if a booking is made meanwhile; drop repeats.
+                          setBookings((rows) => [
+                            ...rows,
+                            ...next.filter(
+                              (b) => !rows.some((r) => r.id === b.id),
+                            ),
+                          ]);
+                          setMoreBookings(next.length === BOOKING_PAGE);
+                        })
+                    : undefined
+                }
                 findParking={() => navigate("search")}
                 cancel={setCancelling}
                 checkout={(b) =>

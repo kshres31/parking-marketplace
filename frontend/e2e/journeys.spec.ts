@@ -194,3 +194,24 @@ test("owner adds photos and features, edits price, and deletes a listing", async
   await expect(page.getByText("Listing deleted.")).toBeVisible();
   await expect(card).toHaveCount(0);
 });
+
+test("clicking the map searches around that point", async ({ page }) => {
+  await page.goto("/");
+  const map = page.getByRole("region", { name: /Parking locations map/ });
+  const place = page.getByLabel("Where are you going?");
+  await expect(
+    page.getByRole("button", { name: /The Loop courtyard/ }),
+  ).toBeVisible();
+  // Near the Chicago demo spaces, a click keeps them in range.
+  await map.click();
+  await expect(place).toHaveValue("Map pin");
+  await expect(
+    page.getByRole("button", { name: /The Loop courtyard/ }),
+  ).toBeVisible();
+  // In New York there are no demo spaces.
+  await place.selectOption("New York");
+  await map.click();
+  await expect(
+    page.getByRole("heading", { name: "0 available spaces" }),
+  ).toBeVisible();
+});

@@ -45,6 +45,7 @@ export function SearchPanel({
         <label className="destination">
           Where are you going?
           <select value={city} onChange={(e) => setCity(e.target.value)}>
+            {!(city in CITIES) && <option>{city}</option>}
             {Object.keys(CITIES).map((name) => (
               <option key={name}>{name}</option>
             ))}

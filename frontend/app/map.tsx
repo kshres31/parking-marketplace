@@ -8,12 +8,17 @@ export default function ParkingMap({
   center,
   selected,
   select,
+  pick,
 }: {
   spaces: Space[];
   center: [number, number];
   selected?: string;
   select: (space: Space) => void;
+  pick?: (center: [number, number]) => void;
 }) {
+  // The click handler is bound once, so read the latest callback through a ref.
+  const pickRef = useRef(pick);
+  pickRef.current = pick;
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const pins = useRef<L.LayerGroup | null>(null);
@@ -27,6 +32,9 @@ export default function ParkingMap({
     }).addTo(map.current);
     L.control.zoom({ position: "bottomright" }).addTo(map.current);
     pins.current = L.layerGroup().addTo(map.current);
+    map.current.on("click", (e) =>
+      pickRef.current?.([e.latlng.lat, e.latlng.lng]),
+    );
     return () => {
       map.current?.remove();
       map.current = null;
@@ -59,7 +67,7 @@ export default function ParkingMap({
       className="map"
       ref={el}
       role="region"
-      aria-label="Parking locations map. All spaces are also listed beside the map."
+      aria-label="Parking locations map. Click the map to search around that point. All spaces are also listed beside the map."
     />
   );
 }

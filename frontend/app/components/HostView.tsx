@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import { imageUrl } from "../lib/api";
 import { date, featureLabel, money } from "../lib/format";
 import type { Booking, Space } from "../lib/types";
@@ -18,6 +19,11 @@ export function HostView({
   edit: (space: Space) => void;
   remove: (space: Space) => void;
 }) {
+  const [when, setWhen] = useState<"upcoming" | "past">("upcoming");
+  // shortcut: filters the newest 100 rows the API returns; add a server-side filter if owners need deeper history.
+  const shown = bookings.filter(
+    (b) => Date.parse(b.ends_at) > Date.now() === (when === "upcoming"),
+  );
   return (
     <>
       <div className="booking-grid">
@@ -67,9 +73,25 @@ export function HostView({
           </article>
         ))}
       </div>
-      <h2 className="subheading">Reservations at your spaces</h2>
-      {bookings.length === 0 ? (
-        <p className="muted">New reservations will appear here.</p>
+      <div className="subheading-row">
+        <h2 className="subheading">Reservations at your spaces</h2>
+        <label>
+          Show
+          <select
+            value={when}
+            onChange={(e) => setWhen(e.target.value as "upcoming" | "past")}
+          >
+            <option value="upcoming">Upcoming</option>
+            <option value="past">Past</option>
+          </select>
+        </label>
+      </div>
+      {shown.length === 0 ? (
+        <p className="muted">
+          {when === "upcoming"
+            ? "New reservations will appear here."
+            : "No past reservations yet."}
+        </p>
       ) : (
         <div className="table-wrap">
           <table>
@@ -83,7 +105,7 @@ export function HostView({
               </tr>
             </thead>
             <tbody>
-              {bookings.map((b) => (
+              {shown.map((b) => (
                 <tr key={b.id}>
                   <td>{b.title}</td>
                   <td>{b.customer}</td>
