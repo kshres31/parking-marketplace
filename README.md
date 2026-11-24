@@ -55,7 +55,13 @@ automatically read `.env` outside Compose.
 - Timezone-aware intervals, elapsed-time pricing in integer USD cents, maximum 720 hours.
 - Database exclusion protects held/confirmed intervals; adjacent bookings are valid.
 - Customer-scoped UUID retry keys return the existing booking, including cancellations.
-- Owner-only listing/reservation views and customer-only booking reads/cancellation.
+- Separate customer and owner accounts, enforced on the server: owners list, edit, photograph,
+  pause and delete spaces; customers search, reserve, pay and cancel.
+- Listings carry a description, features (covered, EV charging, security, accessible, oversize)
+  and up to six JPEG/PNG/WebP images. Search filters by radius, time, maximum price and features,
+  sorted by distance or price.
+- Deleting a never-booked listing removes it; one with booking history is archived so records
+  survive; one with upcoming reservations cannot be deleted.
 - Twelve-hour revocable sessions, browser origin checks and shared sign-in rate limits.
 - Stripe test holds last 35 minutes; start checkout in the first four minutes. Minimum
   payment $0.50; parking must start at least 40 minutes away.

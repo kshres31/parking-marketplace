@@ -31,6 +31,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.lock
       - run: ruff check .
+      - run: ruff format --check .
       - run: pytest -v --junitxml=test-results.xml
       - run: python -m scripts.benchmark_search
       - uses: actions/setup-node@v4

@@ -13,8 +13,8 @@ pytestmark = pytest.mark.integration
 PASSWORD = "a-local-test-password-only"
 
 
-def account(client, name):
-    response = client.post("/auth/register", json={"username": name, "password": PASSWORD})
+def account(client, name, role="customer"):
+    response = client.post("/auth/register", json={"username": name, "password": PASSWORD, "role": role})
     assert response.status_code == 201, response.text
     return {"Authorization": "Bearer " + response.json()["access_token"]}
 
@@ -77,7 +77,7 @@ def test_expired_and_missing_sessions_are_rejected(client, database_url):
 
 
 def test_search_filters_distance_availability_and_allows_adjacent_booking(client):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space = listing(client, owner)
     listing(client, owner, longitude=-90)
     period = interval()
@@ -97,7 +97,7 @@ def test_search_filters_distance_availability_and_allows_adjacent_booking(client
 
 
 def test_idempotency_and_cancellation_do_not_resurrect_reservations(client):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space, period, key = listing(client, owner), interval(), str(uuid4())
     original = reserve(client, customer, space, period, key)
     assert original.status_code == 201
@@ -116,17 +116,18 @@ def test_idempotency_and_cancellation_do_not_resurrect_reservations(client):
 
 
 def test_account_boundaries_and_listing_deactivation(client):
-    owner, customer, stranger = (
-        account(client, "owner"),
+    owner, customer, stranger, other_owner = (
+        account(client, "owner", "owner"),
         account(client, "customer"),
         account(client, "stranger"),
+        account(client, "other_owner", "owner"),
     )
     space, period = listing(client, owner), interval()
     assert reserve(client, owner, space, period).status_code == 403
     booked = reserve(client, customer, space, period).json()
     assert client.get("/bookings", headers=stranger).json() == []
     assert client.post(f"/bookings/{booked['id']}/cancel", headers=stranger).status_code == 404
-    assert client.patch(f"/listings/{space}", headers=stranger, json={"active": False}).status_code == 404
+    assert client.patch(f"/listings/{space}", headers=other_owner, json={"active": False}).status_code == 404
     assert client.patch(f"/listings/{space}", headers=owner, json={"active": False}).status_code == 200
     assert client.get("/bookings", headers=customer).json()[0]["status"] == "confirmed"
     assert reserve(client, stranger, space, period).status_code == 404
@@ -150,7 +151,7 @@ def contend(client, database_url, space, calls):
 
 
 def test_eight_competing_customers_commit_exactly_one_booking(client, database_url):
-    owner = account(client, "owner")
+    owner = account(client, "owner", "owner")
     space, period = listing(client, owner), interval()
     customers = [account(client, f"customer_{index}") for index in range(8)]
     responses = contend(
@@ -165,7 +166,7 @@ def test_eight_competing_customers_commit_exactly_one_booking(client, database_u
 
 
 def test_concurrent_retries_commit_once(client, database_url):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space, period, key = listing(client, owner), interval(), str(uuid4())
     responses = contend(
         client, database_url, space, [lambda: reserve(client, customer, space, period, key)] * 2
@@ -176,7 +177,7 @@ def test_concurrent_retries_commit_once(client, database_url):
 
 
 def test_failed_insert_can_be_retried_without_consuming_key(client, database_url):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space, period = listing(client, owner), interval()
     original = reserve(client, customer, space, period)
     key = str(uuid4())
@@ -186,7 +187,7 @@ def test_failed_insert_can_be_retried_without_consuming_key(client, database_url
 
 
 def test_bad_interval_and_past_booking_are_rejected(client):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space, period = listing(client, owner), interval()
     assert reserve(client, customer, space, {**period, "ends_at": period["starts_at"]}).status_code == 422
     past = datetime.now(UTC) - timedelta(days=2)
@@ -203,7 +204,7 @@ def test_bad_interval_and_past_booking_are_rejected(client):
 
 
 def test_request_cannot_choose_another_customer_or_omit_retry_key(client):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space, period = listing(client, owner), interval()
     assert client.post("/bookings", headers=customer, json={"listing_id": space, **period}).status_code == 422
     response = client.post(
@@ -216,7 +217,7 @@ def test_request_cannot_choose_another_customer_or_omit_retry_key(client):
 
 
 def test_database_duration_limit_is_elapsed_time_across_dst(client, database_url):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space = listing(client, owner)
     booking = reserve(client, customer, space, interval()).json()
     with psycopg.connect(database_url) as conn:
@@ -236,4 +237,4 @@ def test_changed_applied_migration_fails_without_touching_schema(client, databas
     with pytest.raises(RuntimeError, match="Applied migration changed"):
         migrate(database_url, tmp_path)
     with psycopg.connect(database_url) as conn:
-        assert conn.execute("SELECT count(*) FROM schema_migration").fetchone()[0] == 3
+        assert conn.execute("SELECT count(*) FROM schema_migration").fetchone()[0] == 4

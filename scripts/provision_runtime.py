@@ -17,7 +17,8 @@ def provision(url, password):
         conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
         conn.execute("GRANT USAGE ON SCHEMA public TO parking_app")
         conn.execute("""GRANT SELECT, INSERT, UPDATE, DELETE ON
-            account, session, listing, booking, payment_event, refund_job, auth_limit TO parking_app""")
+            account, session, listing, listing_image, booking, payment_event, refund_job, auth_limit
+            TO parking_app""")
 
 
 if __name__ == "__main__":
