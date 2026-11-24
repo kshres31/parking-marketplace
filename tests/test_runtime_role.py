@@ -16,7 +16,7 @@ def test_runtime_role_books_but_cannot_change_schema(client, database_url):
     provision(database_url, password)
     runtime_url = make_conninfo(database_url, user="parking_app", password=password)
     with TestClient(create_app(runtime_url)) as runtime:
-        owner, customer = account(runtime, "role_owner"), account(runtime, "role_customer")
+        owner, customer = account(runtime, "role_owner", "owner"), account(runtime, "role_customer")
         space = listing(runtime, owner)
         assert reserve(runtime, customer, space, interval()).status_code == 201
         assert (

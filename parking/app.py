@@ -1,11 +1,12 @@
 import hashlib
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -13,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from psycopg import Connection
+from psycopg import Connection, sql
 from psycopg.errors import ExclusionViolation, UniqueViolation
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -33,6 +34,18 @@ class Credentials(BaseModel):
     password: str = Field(min_length=12, max_length=128)
 
 
+Role = Literal["customer", "owner"]
+Feature = Literal["covered", "ev_charging", "security", "accessible", "oversize"]
+MAX_IMAGES = 6
+MAX_IMAGE_BYTES = 2 * 1024 * 1024
+IMAGE_UPLOAD_PATH = re.compile(r"^/listings/[^/]+/images$")
+
+
+class Registration(Credentials):
+    # Owners self-identify; there is no administrator role to escalate into.
+    role: Role = "customer"
+
+
 class ListingInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str = Field(min_length=3, max_length=120)
@@ -40,6 +53,30 @@ class ListingInput(BaseModel):
     latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
     longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
     hourly_price_cents: int = Field(ge=1, le=100000, strict=True)
+    description: str = Field(default="", max_length=2000)
+    features: list[Feature] = Field(default_factory=list, max_length=5)
+
+
+class ListingUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str | None = Field(default=None, min_length=3, max_length=120)
+    address: str | None = Field(default=None, min_length=3, max_length=250)
+    latitude: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
+    longitude: float | None = Field(default=None, ge=-180, le=180, allow_inf_nan=False)
+    hourly_price_cents: int | None = Field(default=None, ge=1, le=100000, strict=True)
+    description: str | None = Field(default=None, max_length=2000)
+    features: list[Feature] | None = Field(default=None, max_length=5)
+    active: bool | None = Field(default=None, strict=True)
+
+    @model_validator(mode="after")
+    def coherent(self):
+        if not self.model_fields_set:
+            raise ValueError("Provide at least one field to update")
+        if any(getattr(self, name) is None for name in self.model_fields_set):
+            raise ValueError("Fields cannot be set to null")
+        if ("latitude" in self.model_fields_set) != ("longitude" in self.model_fields_set):
+            raise ValueError("Latitude and longitude must be updated together")
+        return self
 
 
 class Interval(BaseModel):
@@ -66,11 +103,19 @@ class SearchInput(Interval):
     longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
     radius_m: int = Field(default=5000, ge=100, le=50000)
     limit: int = Field(default=50, ge=1, le=100)
+    max_price_cents: int | None = Field(default=None, ge=1, le=100000)
+    features: list[Feature] = Field(default_factory=list, max_length=5)
+    sort: Literal["distance", "price"] = "distance"
 
 
-class ListingStatus(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    active: bool = Field(strict=True)
+def sniff_image(data: bytes) -> str | None:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def price_cents(hourly: int, starts: datetime, ends: datetime) -> int:
@@ -98,7 +143,7 @@ def current_user(
     if not token or len(token) > 256:
         raise HTTPException(401, "Sign in required", headers={"WWW-Authenticate": "Bearer"})
     user = conn.execute(
-        """SELECT a.id, a.username FROM account a JOIN session s ON s.account_id = a.id
+        """SELECT a.id, a.username, a.role FROM account a JOIN session s ON s.account_id = a.id
         WHERE s.token_hash = %s AND s.expires_at > now()""",
         (token_hash(token),),
     ).fetchone()
@@ -108,6 +153,35 @@ def current_user(
 
 
 User = Annotated[dict, Depends(current_user)]
+
+
+def require_role(role: str):
+    def check(user: User):
+        if user["role"] != role:
+            raise HTTPException(403, f"This action requires a {role} account")
+        return user
+
+    return check
+
+
+Owner = Annotated[dict, Depends(require_role("owner"))]
+Customer = Annotated[dict, Depends(require_role("customer"))]
+
+LISTING_COLUMNS = """l.id, l.title, l.address, l.description, l.features, l.hourly_price_cents, l.active,
+    ST_Y(l.location::geometry) AS latitude, ST_X(l.location::geometry) AS longitude,
+    ARRAY(SELECT i.id FROM listing_image i WHERE i.listing_id = l.id
+          ORDER BY i.created_at, i.id) AS image_ids"""
+
+
+def owned_listing(conn, listing_id, owner_id):
+    """Lock an owner's live listing; serializes edits, uploads and deletion against bookings."""
+    row = conn.execute(
+        "SELECT * FROM listing WHERE id = %s AND owner_id = %s AND archived_at IS NULL FOR UPDATE",
+        (listing_id, owner_id),
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, "Listing not found")
+    return row
 
 
 def issue_session(conn, user):
@@ -194,14 +268,15 @@ def create_app(database_url: str | None = None) -> FastAPI:
             if (origin and origin != allowed) or (browser_request and origin != allowed):
                 return JSONResponse(status_code=403, content={"detail": "Request origin is not allowed"})
         if request.method in {"POST", "PUT", "PATCH"}:
+            limit = MAX_IMAGE_BYTES if IMAGE_UPLOAD_PATH.match(request.url.path) else 65536
             content = bytearray()
             async for chunk in request.stream():
                 content.extend(chunk)
-                if len(content) > 65536:
+                if len(content) > limit:
                     return JSONResponse(status_code=413, content={"detail": "Request is too large"})
             request._body = bytes(content)
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["X-Frame-Options"] = "DENY"
@@ -217,15 +292,15 @@ def create_app(database_url: str | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/auth/register", status_code=201)
-    def register(body: Credentials, conn: DB, request: Request, response: Response):
+    def register(body: Registration, conn: DB, request: Request, response: Response):
         auth_limit(conn, request)
         hashed = passwords.hash(body.password)
-        user = {"id": uuid4(), "username": body.username}
+        user = {"id": uuid4(), "username": body.username, "role": body.role}
         try:
             with conn.transaction():
                 conn.execute(
-                    "INSERT INTO account(id, username, password_hash) VALUES (%s, %s, %s)",
-                    (user["id"], user["username"], hashed),
+                    "INSERT INTO account(id, username, password_hash, role) VALUES (%s, %s, %s, %s)",
+                    (user["id"], user["username"], hashed, user["role"]),
                 )
                 result = issue_session(conn, user)
             return browser_session(result, request, response)
@@ -241,7 +316,9 @@ def create_app(database_url: str | None = None) -> FastAPI:
         if not usable or not correct:
             raise HTTPException(401, "Invalid username or password")
         with conn.transaction():
-            result = issue_session(conn, {"id": account["id"], "username": account["username"]})
+            result = issue_session(
+                conn, {"id": account["id"], "username": account["username"], "role": account["role"]}
+            )
         return browser_session(result, request, response)
 
     @app.post("/auth/logout", status_code=204)
@@ -262,16 +339,15 @@ def create_app(database_url: str | None = None) -> FastAPI:
         return user
 
     @app.get("/host/listings")
-    def host_listings(user: User, conn: DB):
+    def host_listings(user: Owner, conn: DB):
         return conn.execute(
-            """SELECT id, title, address, hourly_price_cents, active,
-            ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude
-            FROM listing WHERE owner_id = %s ORDER BY created_at DESC LIMIT 100""",
+            f"""SELECT {LISTING_COLUMNS} FROM listing l
+            WHERE l.owner_id = %s AND l.archived_at IS NULL ORDER BY l.created_at DESC LIMIT 100""",
             (user["id"],),
         ).fetchall()
 
     @app.get("/host/bookings")
-    def host_bookings(user: User, conn: DB):
+    def host_bookings(user: Owner, conn: DB):
         return conn.execute(
             """SELECT b.id, b.starts_at, b.ends_at, b.status, b.payment_status,
             b.total_price_cents, l.title, a.username AS customer
@@ -281,56 +357,182 @@ def create_app(database_url: str | None = None) -> FastAPI:
         ).fetchall()
 
     @app.post("/listings", status_code=201)
-    def add_listing(body: ListingInput, user: User, conn: DB):
+    def add_listing(body: ListingInput, user: Owner, conn: DB):
+        listing_id = uuid4()
         with conn.transaction():
-            row = conn.execute(
-                """INSERT INTO listing(id, owner_id, title, address, location, hourly_price_cents)
-                VALUES (%s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)
-                RETURNING id, owner_id, title, address, hourly_price_cents, active""",
+            conn.execute(
+                """INSERT INTO listing(id, owner_id, title, address, location, hourly_price_cents,
+                                       description, features)
+                VALUES (%s, %s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s, %s)""",
                 (
-                    uuid4(),
+                    listing_id,
                     user["id"],
                     body.title,
                     body.address,
                     body.longitude,
                     body.latitude,
                     body.hourly_price_cents,
+                    body.description,
+                    sorted(set(body.features)),
                 ),
+            )
+            return conn.execute(
+                f"SELECT {LISTING_COLUMNS}, l.owner_id FROM listing l WHERE l.id = %s", (listing_id,)
             ).fetchone()
-        return row
 
     @app.patch("/listings/{listing_id}")
-    def set_listing_status(listing_id: UUID, body: ListingStatus, user: User, conn: DB):
+    def update_listing(listing_id: UUID, body: ListingUpdate, user: Owner, conn: DB):
+        # Price changes apply to new reservations only; bookings store their own total.
+        fields = body.model_dump(exclude_unset=True)
+        assignments = [sql.SQL("updated_at = now()")]
+        values = []
+        if "latitude" in fields:
+            assignments.append(sql.SQL("location = ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography"))
+            values += [fields.pop("longitude"), fields.pop("latitude")]
+        if "features" in fields:
+            fields["features"] = sorted(set(fields["features"]))
+        for name, value in fields.items():
+            assignments.append(sql.SQL("{} = %s").format(sql.Identifier(name)))
+            values.append(value)
         with conn.transaction():
-            row = conn.execute(
-                "UPDATE listing SET active = %s WHERE id = %s AND owner_id = %s RETURNING id, active",
-                (body.active, listing_id, user["id"]),
+            owned_listing(conn, listing_id, user["id"])
+            conn.execute(
+                sql.SQL("UPDATE listing SET {} WHERE id = %s").format(sql.SQL(", ").join(assignments)),
+                (*values, listing_id),
+            )
+            return conn.execute(
+                f"SELECT {LISTING_COLUMNS} FROM listing l WHERE l.id = %s", (listing_id,)
             ).fetchone()
-            if not row:
-                raise HTTPException(404, "Listing not found")
+
+    @app.delete("/listings/{listing_id}")
+    def delete_listing(listing_id: UUID, user: Owner, conn: DB):
+        with conn.transaction():
+            # The row lock conflicts with the FOR SHARE lock a reservation takes, so a booking
+            # either commits first (and is seen below) or waits and then finds the listing gone.
+            owned_listing(conn, listing_id, user["id"])
+            payments.expire_holds(conn, listing_id)
+            upcoming = conn.execute(
+                """SELECT 1 FROM booking WHERE listing_id = %s AND ends_at > now()
+                AND status IN ('held', 'confirmed') LIMIT 1""",
+                (listing_id,),
+            ).fetchone()
+            if upcoming:
+                raise HTTPException(
+                    409,
+                    "This space has upcoming reservations. Pause it to stop new bookings, "
+                    "then delete it after they end.",
+                )
+            if conn.execute("SELECT 1 FROM booking WHERE listing_id = %s LIMIT 1", (listing_id,)).fetchone():
+                conn.execute("DELETE FROM listing_image WHERE listing_id = %s", (listing_id,))
+                conn.execute(
+                    """UPDATE listing SET active = false, archived_at = now(), updated_at = now()
+                    WHERE id = %s""",
+                    (listing_id,),
+                )
+                return {"id": listing_id, "outcome": "archived"}
+            conn.execute("DELETE FROM listing WHERE id = %s", (listing_id,))
+            return {"id": listing_id, "outcome": "deleted"}
+
+    @app.post("/listings/{listing_id}/images", status_code=201)
+    async def upload_image(listing_id: UUID, request: Request, user: Owner):
+        data = await request.body()
+        content_type = sniff_image(data)
+        declared = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if not content_type or declared != content_type:
+            raise HTTPException(415, "Upload a JPEG, PNG or WebP image with a matching Content-Type")
+        from starlette.concurrency import run_in_threadpool
+
+        def store():
+            with request.app.state.pool.connection() as conn, conn.transaction():
+                owned_listing(conn, listing_id, user["id"])
+                count = conn.execute(
+                    "SELECT count(*) AS n FROM listing_image WHERE listing_id = %s", (listing_id,)
+                ).fetchone()["n"]
+                if count >= MAX_IMAGES:
+                    raise HTTPException(409, f"A listing can have at most {MAX_IMAGES} images")
+                return conn.execute(
+                    """INSERT INTO listing_image(id, listing_id, content_type, data, sha256)
+                    VALUES (%s, %s, %s, %s, %s) RETURNING id, content_type, octet_length(data) AS bytes""",
+                    (uuid4(), listing_id, content_type, data, hashlib.sha256(data).hexdigest()),
+                ).fetchone()
+
+        return await run_in_threadpool(store)
+
+    @app.get("/listings/{listing_id}/images/{image_id}")
+    def image(listing_id: UUID, image_id: UUID, conn: DB):
+        row = conn.execute(
+            """SELECT i.content_type, i.data, i.sha256 FROM listing_image i
+            JOIN listing l ON l.id = i.listing_id
+            WHERE i.id = %s AND i.listing_id = %s AND l.archived_at IS NULL""",
+            (image_id, listing_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Image not found")
+        return Response(
+            content=bytes(row["data"]),
+            media_type=row["content_type"],
+            headers={
+                # Image ids are never reused for different bytes.
+                "Cache-Control": "public, max-age=86400, immutable",
+                "ETag": '"' + row["sha256"] + '"',
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+            },
+        )
+
+    @app.delete("/listings/{listing_id}/images/{image_id}", status_code=204)
+    def delete_image(listing_id: UUID, image_id: UUID, user: Owner, conn: DB):
+        with conn.transaction():
+            owned_listing(conn, listing_id, user["id"])
+            deleted = conn.execute(
+                "DELETE FROM listing_image WHERE id = %s AND listing_id = %s RETURNING id",
+                (image_id, listing_id),
+            ).fetchone()
+        if not deleted:
+            raise HTTPException(404, "Image not found")
+        return Response(status_code=204)
+
+    @app.get("/listings/{listing_id}")
+    def listing_detail(listing_id: UUID, conn: DB):
+        row = conn.execute(
+            f"SELECT {LISTING_COLUMNS} FROM listing l WHERE l.id = %s AND l.active", (listing_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Listing not found")
         return row
 
     @app.get("/listings")
     def search(conn: DB, query: Annotated[SearchInput, Query()]):
+        order = "l.hourly_price_cents, distance_m, l.id" if query.sort == "price" else "distance_m, l.id"
         return conn.execute(
-            """WITH origin AS (
+            f"""WITH origin AS (
                 SELECT ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography AS point)
-            SELECT l.id, l.title, l.address, l.hourly_price_cents,
-                   ST_Y(l.location::geometry) AS latitude, ST_X(l.location::geometry) AS longitude,
+            SELECT {LISTING_COLUMNS},
                    round(ST_Distance(l.location, o.point)::numeric, 1) AS distance_m
             FROM listing l CROSS JOIN origin o
             WHERE l.active AND ST_DWithin(l.location, o.point, %s)
+              AND (%s::int IS NULL OR l.hourly_price_cents <= %s)
+              AND l.features @> %s::text[]
               AND NOT EXISTS (SELECT 1 FROM booking b WHERE b.listing_id = l.id
                   AND (b.status = 'confirmed' OR (b.status = 'held' AND b.hold_expires_at > now()))
                   AND tstzrange(b.starts_at, b.ends_at, '[)') && tstzrange(%s, %s, '[)'))
-            ORDER BY distance_m, l.id LIMIT %s""",
-            (query.longitude, query.latitude, query.radius_m, query.starts_at, query.ends_at, query.limit),
+            ORDER BY {order} LIMIT %s""",
+            (
+                query.longitude,
+                query.latitude,
+                query.radius_m,
+                query.max_price_cents,
+                query.max_price_cents,
+                sorted(set(query.features)),
+                query.starts_at,
+                query.ends_at,
+                query.limit,
+            ),
         ).fetchall()
 
     @app.post("/bookings", status_code=201)
     def reserve(
         body: BookingInput,
-        user: User,
+        user: Customer,
         conn: DB,
         response: Response,
         request_id: Annotated[UUID, Header(alias="Idempotency-Key")],
@@ -394,7 +596,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
 
     @app.get("/bookings")
     def my_bookings(
-        user: User,
+        user: Customer,
         conn: DB,
         limit: Annotated[int, Query(ge=1, le=100)] = 50,
         offset: Annotated[int, Query(ge=0, le=10000)] = 0,
@@ -406,7 +608,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         ).fetchall()
 
     @app.post("/bookings/{booking_id}/cancel")
-    def cancel(booking_id: UUID, user: User, conn: DB):
+    def cancel(booking_id: UUID, user: Customer, conn: DB):
         with conn.transaction():
             booking = conn.execute(
                 "SELECT * FROM booking WHERE id = %s AND customer_id = %s FOR UPDATE",
@@ -428,7 +630,7 @@ def create_app(database_url: str | None = None) -> FastAPI:
         return booking
 
     @app.post("/bookings/{booking_id}/checkout")
-    def start_checkout(booking_id: UUID, user: User, conn: DB):
+    def start_checkout(booking_id: UUID, user: Customer, conn: DB):
         return payments.checkout(conn, booking_id, user["id"])
 
     @app.post("/payments/webhook")
