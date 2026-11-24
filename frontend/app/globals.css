@@ -936,3 +936,137 @@ dialog .alert {
 .role-choice input {
   width: auto;
 }
+.search-form {
+  margin-bottom: 28px;
+}
+.search-form .search-bar {
+  margin-bottom: 12px;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin: 0 4%;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.filters > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.filters select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: white;
+  color: var(--ink);
+}
+.feature-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.feature-chips legend {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+.chip {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  background: white;
+}
+.chip.on,
+.chip:has(input:checked) {
+  background: var(--lime);
+  border-color: #b9d95a;
+}
+.chip input {
+  width: auto !important;
+  margin: 0;
+}
+.space-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  align-self: flex-start;
+  flex: none;
+}
+.tags {
+  font-size: 0.75rem;
+  color: #436023 !important;
+}
+.card-photo {
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+.gallery img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+}
+.gallery figure {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+.gallery figure button {
+  font-size: 0.75rem;
+}
+.description {
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.feature-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+}
+.feature-list li {
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+}
+.stack textarea {
+  width: 100%;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  resize: vertical;
+}
+@media (max-width: 700px) {
+  .filters {
+    margin: 0 3%;
+  }
+}

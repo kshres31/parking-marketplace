@@ -1,16 +1,8 @@
 "use client";
 import { useEffect, useRef } from "react";
 import L from "leaflet";
-export type Space = {
-  id: string;
-  title: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  hourly_price_cents: number;
-  distance_m?: number;
-  active?: boolean;
-};
+import type { Space } from "./lib/types";
+export type { Space };
 export default function ParkingMap({
   spaces,
   center,
