@@ -24,12 +24,22 @@ webhooks and a refund worker, HttpOnly cookie sessions, and a Next.js map UI.
 Verified locally against PostgreSQL 16 + PostGIS 3: 43 pytest tests and 4 Playwright browser
 tests pass; `ruff check` and `ruff format --check` are clean.
 
+### Milestone 2 (branch `feat/frontend-components`, stacked on milestone 1)
+
+- `page.tsx` went from 937 lines to a ~550-line container. Views and dialogs live in
+  `frontend/app/components/`; pure logic (period validation, query building, listing form
+  parsing, image checks, money) lives in `frontend/app/lib/`.
+- UI for listing descriptions, features, photo upload/gallery/removal, editing, delete or
+  archive, and the max-price, feature and sort search filters.
+- 32 Vitest + Testing Library tests (`frontend/unit/`), run in CI with `tsc --noEmit`.
+- Two new Playwright journeys (feature/price filtering with listing details; owner photo upload,
+  edit and delete). 8/8 browser tests pass on desktop and mobile locally.
+
 ## Next milestones
 
-1. Frontend: split `frontend/app/page.tsx` (~1000 lines) into components and hooks; add UI for
-   descriptions, features, image upload/gallery, editing, deletion, and the price/feature/sort
-   filters; add Vitest + Testing Library unit tests and run them in CI.
-2. Booking: owner-side view of booking history filters; customer booking pagination in the UI.
+1. Booking UX: customer booking pagination in the UI and an owner filter for upcoming vs past.
+2. Search: let customers pick a point on the map (or geocode an address) instead of three
+   fixed cities.
 3. Operations: deployed acceptance pass, restore drill and alerting (see README).
 
 ## Decisions
