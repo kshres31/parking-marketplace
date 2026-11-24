@@ -37,7 +37,8 @@ def run() -> dict:
         with psycopg.connect(url, autocommit=True) as conn:
             owner = uuid4()
             conn.execute(
-                "INSERT INTO account(id, username, password_hash) VALUES (%s, 'benchmark', 'no-login')",
+                """INSERT INTO account(id, username, password_hash, role)
+                VALUES (%s, 'benchmark', 'no-login', 'owner')""",
                 (owner,),
             )
             conn.execute(

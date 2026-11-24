@@ -55,7 +55,7 @@ def webhook(client, event, age=0, bad=False):
 
 
 def held_booking(client):
-    owner, customer = account(client, "owner"), account(client, "customer")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
     space = listing(client, owner)
     response = reserve(client, customer, space, interval())
     assert response.status_code == 201, response.text
@@ -94,7 +94,8 @@ def test_auth_limit_and_request_size(client, monkeypatch):
 
 
 def test_host_views_do_not_expose_other_owners(client):
-    owner, customer, other = account(client, "owner"), account(client, "customer"), account(client, "other")
+    owner, customer = account(client, "owner", "owner"), account(client, "customer")
+    other = account(client, "other", "owner")
     space = listing(client, owner)
     reserve(client, customer, space, interval())
     assert len(client.get("/host/listings", headers=owner).json()) == 1

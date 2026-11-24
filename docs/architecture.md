@@ -25,8 +25,13 @@ is a convenience; its result never guarantees that a later reservation will stil
 ## Requests, retries and ownership
 
 The server derives the customer from a stored session, not from a request body. A listing's
-owner is similarly server-derived. Listing status updates require the owner; booking reads
-and cancellation require the booking customer. Customers cannot reserve their own listing.
+owner is similarly server-derived. Every account has one role, `customer` or `owner`, chosen
+at registration and read from the database on each request (login cannot claim one). Owner
+endpoints (listing create/update/delete, images, host views) and customer endpoints
+(reserve, booking history, cancel, checkout) are guarded by FastAPI dependencies that return
+403 for the wrong role. Within a role, rows are still scoped to the signed-in account: another
+owner's listing is a 404, not a 403, so ids are not confirmed to outsiders. Migration 004
+promoted existing accounts that already hosted spaces to `owner`.
 
 Reservation retries use a UUID scoped to the customer, with a unique constraint on
 `(customer_id, request_id)`. The customer's account row is locked before checking a key,
@@ -48,16 +53,40 @@ renders attributed OpenStreetMap tiles; search/list/book/cancel/host operations 
 API. Browser login returns an HttpOnly cookie and user metadata, never a JavaScript-readable
 token. Unsafe browser requests require the configured Origin; non-browser bearer clients
 retain the existing API contract. Authentication attempt counters are shared in PostgreSQL.
-No Redis dependency is introduced solely for a technology claim.
+No Redis dependency is introduced solely for a technology claim: sessions, rate-limit counters
+and booking exclusivity all need PostgreSQL's durability or transactions, and search results
+depend on live availability, so a cache would add invalidation risk without a measured need.
 
 Compose separates the migration owner from the app/worker role. Maintenance runs independently
 and releases expired holds, removes expired sessions/counters, and retries refund jobs.
+
+## Listing lifecycle and images
+
+Owners can edit any listing field with a partial `PATCH`. Bookings keep the total they were
+quoted, so a price change affects only new reservations. Every owner mutation first locks the
+listing row (`FOR UPDATE`); reservations take `FOR SHARE` on the same row, so edits, image
+uploads and deletion serialize against concurrent bookings.
+
+`DELETE /listings/{id}` refuses (409) while held or confirmed reservations have not ended. A
+listing that was never booked is removed with its images. A listing with booking history is
+archived instead: it becomes inactive, leaves the owner's list, search and detail endpoints,
+and loses its images, while both sides' booking history keeps its title and address. A
+constraint keeps archived listings inactive. Tests race deletion against reservation and
+check that no confirmed booking is left on an inactive listing.
+
+Images are stored in PostgreSQL (`listing_image`, at most six per listing, 2 MiB each) so the
+demo stays a single dependency. The type is decided by magic bytes (JPEG, PNG or WebP) and must
+match the declared `Content-Type`; SVG and anything else is refused. Images are served with an
+immutable cache header, an ETag and a sandboxing CSP. Object storage would replace this table in
+a production deployment.
 
 ## Location search and money
 
 Coordinates are stored as `geography(Point, 4326)`. `ST_DWithin` uses meters and a partial
 GiST index on active listings. Results are ordered by distance and listing ID and bounded
-to 100. Search excludes confirmed interval conflicts. Radius is capped at 50 km.
+to 100, or by price when `sort=price`. Search excludes confirmed interval conflicts and can
+filter by `max_price_cents` and required `features` (a closed vocabulary checked by the
+database, with a partial GIN index). Radius is capped at 50 km.
 The [recorded synthetic radius-query plan](../evidence/README.md) selects the spatial index.
 That benchmark excludes booking availability and distance sorting; the complete endpoint
 still needs measurement with representative listing and reservation data.
